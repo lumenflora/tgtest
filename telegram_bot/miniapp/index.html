@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Channel Manager</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg:       var(--tg-theme-bg-color, #ffffff);
+    --bg2:      var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --text:     var(--tg-theme-text-color, #111111);
+    --hint:     var(--tg-theme-hint-color, #888888);
+    --accent:   var(--tg-theme-button-color, #2481cc);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --radius:   10px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }
+
+  .tabs { display: flex; background: var(--bg2); border-bottom: 1px solid rgba(0,0,0,.08); position: sticky; top: 0; z-index: 10; }
+  .tab  { flex: 1; padding: 12px 0; text-align: center; font-size: 14px; font-weight: 500; color: var(--hint); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .page { display: none; padding: 16px; }
+  .page.active { display: block; }
+
+  h2 { font-size: 17px; font-weight: 600; margin-bottom: 12px; }
+
+  .card { background: var(--bg2); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; }
+  .card-text { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .card-meta { font-size: 12px; color: var(--hint); margin-top: 6px; }
+  .card-actions { margin-top: 10px; display: flex; gap: 8px; }
+
+  textarea {
+    width: 100%; min-height: 120px; padding: 12px;
+    background: var(--bg2); border: 1px solid rgba(0,0,0,.12);
+    border-radius: var(--radius); font-size: 14px; color: var(--text);
+    resize: vertical; font-family: inherit;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 10px 18px; border: none; border-radius: var(--radius);
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: opacity .15s;
+  }
+  .btn:active { opacity: .75; }
+  .btn-primary  { background: var(--accent); color: var(--btn-text); }
+  .btn-danger   { background: #e53e3e; color: #fff; }
+  .btn-ghost    { background: rgba(0,0,0,.06); color: var(--text); }
+
+  .empty { text-align: center; color: var(--hint); padding: 40px 20px; font-size: 14px; }
+  .badge { display: inline-block; background: var(--accent); color: var(--btn-text); font-size: 11px; border-radius: 20px; padding: 2px 7px; margin-left: 6px; }
+
+  .section-label { font-size: 12px; font-weight: 600; color: var(--hint); text-transform: uppercase; letter-spacing: .5px; margin: 16px 0 8px; }
+
+  .spinner { text-align: center; padding: 24px; color: var(--hint); }
+
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: #222; color: #fff; padding: 10px 20px; border-radius: 20px;
+    font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('examples')">📚 Examples</div>
+  <div class="tab" onclick="switchTab('add')">➕ Add</div>
+  <div class="tab" onclick="switchTab('pending')" id="pending-tab">⏳ Pending</div>
+</div>
+
+<!-- EXAMPLES TAB -->
+<div class="page active" id="page-examples">
+  <div class="section-label">Stored example posts</div>
+  <div id="examples-list"><div class="spinner">Loading…</div></div>
+</div>
+
+<!-- ADD EXAMPLE TAB -->
+<div class="page" id="page-add">
+  <div class="section-label">Paste or type a post example</div>
+  <textarea id="example-input" placeholder="Paste a great example post here — text, emojis, hashtags, everything..."></textarea>
+  <br><br>
+  <button class="btn btn-primary" onclick="addExample()" style="width:100%">Save Example</button>
+  <p style="margin-top:12px; font-size:13px; color:var(--hint)">
+    The AI will study these examples to match your channel's unique voice and style.
+    Add at least 3–5 for best results.
+  </p>
+</div>
+
+<!-- PENDING POSTS TAB -->
+<div class="page" id="page-pending">
+  <div class="section-label">Awaiting admin approval</div>
+  <div id="pending-list"><div class="spinner">Loading…</div></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const tabs = ['examples','add','pending'];
+  const idx  = tabs.indexOf(name);
+  document.querySelectorAll('.tab')[idx].classList.add('active');
+  document.getElementById('page-'+name).classList.add('active');
+  if (name === 'examples') loadExamples();
+  if (name === 'pending')  loadPending();
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── Examples ──────────────────────────────────────────────────────────────────
+async function loadExamples() {
+  const el = document.getElementById('examples-list');
+  el.innerHTML = '<div class="spinner">Loading…</div>';
+  try {
+    const res  = await fetch('/api/examples');
+    const data = await res.json();
+    if (!data.length) {
+      el.innerHTML = '<div class="empty">No examples yet.<br>Go to ➕ Add to paste your first one.</div>';
+      return;
+    }
+    el.innerHTML = data.map(ex => `
+      <div class="card" id="ex-${ex.id}">
+        <div class="card-text">${escHtml(ex.text)}</div>
+        <div class="card-meta">#${ex.id} · ${new Date(ex.created_at).toLocaleDateString()}</div>
+        <div class="card-actions">
+          <button class="btn btn-danger" onclick="deleteExample(${ex.id})">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Failed to load.</div>';
+  }
+}
+
+async function addExample() {
+  const text = document.getElementById('example-input').value.trim();
+  if (!text) { showToast('Please enter some text first'); return; }
+
+  const res = await fetch('/api/examples', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ text }),
+  });
+
+  if (res.ok) {
+    document.getElementById('example-input').value = '';
+    showToast('✅ Example saved!');
+    // Notify the bot if inside Telegram
+    if (tg) tg.sendData(JSON.stringify({ action: 'add_example', text }));
+  } else {
+    showToast('❌ Failed to save.');
+  }
+}
+
+async function deleteExample(id) {
+  if (!confirm('Delete this example?')) return;
+  await fetch(`/api/examples/${id}`, { method: 'DELETE' });
+  document.getElementById(`ex-${id}`)?.remove();
+  showToast('🗑️ Deleted');
+}
+
+// ── Pending posts ─────────────────────────────────────────────────────────────
+async function loadPending() {
+  const el = document.getElementById('pending-list');
+  el.innerHTML = '<div class="spinner">Loading…</div>';
+  try {
+    const res  = await fetch('/api/pending');
+    const data = await res.json();
+    const tab  = document.getElementById('pending-tab');
+    if (!data.length) {
+      tab.innerHTML = '⏳ Pending';
+      el.innerHTML = '<div class="empty">No posts pending approval right now.</div>';
+      return;
+    }
+    tab.innerHTML = `⏳ Pending <span class="badge">${data.length}</span>`;
+    el.innerHTML = data.map(p => `
+      <div class="card">
+        <div class="card-text">${escHtml(p.text)}</div>
+        <div class="card-meta">Draft #${p.id} · ${new Date(p.created_at).toLocaleDateString()}</div>
+        <div class="card-meta" style="margin-top:4px;color:#e67e22">⏳ Awaiting approval in bot chat</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Failed to load.</div>';
+  }
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Load examples on start
+loadExamples();
+</script>
+</body>
+</html>
